@@ -1,1 +1,1 @@
-rootProject.name = "vedio-pj"
+rootProject.name = "vedio-demo"

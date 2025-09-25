@@ -1,4 +1,4 @@
-package com.aikrai
+package com.aikrai.core
 
 import org.bytedeco.ffmpeg.ffmpeg
 import org.bytedeco.javacpp.Loader
@@ -15,11 +15,26 @@ import java.util.concurrent.atomic.AtomicInteger
 import kotlin.math.min
 
 /**
- * 视频合并服务：负责扫描叶子目录，按名称排序合并 .ts 切片。
+ * 视频合并服务。
+ *
+ * 职责：
+ * - 深度遍历根目录，识别“叶子目录”（不再包含子目录）。
+ * - 在叶子目录内收集并按自然序排序 .ts 切片，使用 ffmpeg concat 合并为目标容器（mp4/mkv）。
+ * - 并发处理多个叶子目录，报告进度、跳过和失败详情。
  */
 class VideoMerger {
   private val log = LoggerFactory.getLogger(VideoMerger::class.java)
 
+  /**
+   * 扫描并合并根目录下所有叶子目录中的 .ts 切片。
+   *
+   * @param rootDir 合并的根目录
+   * @param outputFormat 输出容器格式，仅支持 `mp4`/`mkv`
+   * @param ffmpegExecutable 可选的 ffmpeg 可执行程序路径（为空则自动解析）
+   * @param outputRootDir 可选的统一输出根目录；为空表示输出至原目录
+   * @param progressReporter 进度回调（线程安全调用），便于 UI 更新
+   * @return 合并结果报告（目录数、成功/跳过/失败统计及明细）
+   */
   fun mergeAll(
     rootDir: Path,
     outputFormat: String,
@@ -134,6 +149,12 @@ class VideoMerger {
     )
   }
 
+  /**
+   * 根据 CPU 核心数与任务数估算并发线程数量。
+   *
+   * @param totalLeafCount 待处理叶子目录总数
+   * @return 实际使用的工作线程数，最少 1，最多不超过任务数
+   */
   private fun determineWorkerCount(totalLeafCount: Int): Int {
     val processors = try {
       Runtime.getRuntime().availableProcessors()
@@ -148,6 +169,16 @@ class VideoMerger {
       .coerceAtMost(totalLeafCount.coerceAtLeast(1))
   }
 
+  /**
+   * 处理单个叶子目录：收集 .ts、计算目标文件、调用 ffmpeg 合并并返回结果。
+   *
+   * @param directory 叶子目录
+   * @param normalizedRoot 根目录（已标准化）
+   * @param normalizedOutputRoot 目标输出根目录（可空）
+   * @param format 目标格式（mp4/mkv）
+   * @param ffmpegPath 可执行 ffmpeg 路径
+   * @return 单目录任务结果（成功/跳过/失败及信息）
+   */
   private fun processDirectory(
     directory: Path,
     normalizedRoot: Path,
@@ -224,6 +255,12 @@ class VideoMerger {
     }
   }
 
+  /**
+   * 收集指定根目录下的所有叶子目录（不包含子目录）。
+   *
+   * @param rootDir 根目录
+   * @return 有序的叶子目录列表
+   */
   private fun collectLeafDirectories(rootDir: Path): List<Path> {
     Files.walk(rootDir).use { stream ->
       return stream.filter { Files.isDirectory(it) }
@@ -233,12 +270,24 @@ class VideoMerger {
     }
   }
 
+  /**
+   * 判断目录是否为叶子目录（其下不包含子目录）。
+   *
+   * @param directory 待判定目录
+   * @return 是叶子目录返回 true
+   */
   private fun isLeafDirectory(directory: Path): Boolean {
     Files.list(directory).use { children ->
       return !children.anyMatch { Files.isDirectory(it) }
     }
   }
 
+  /**
+   * 收集并自然序排序目录下的所有 .ts 文件。
+   *
+   * @param directory 目标目录
+   * @return 自然序排序后的 .ts 文件列表
+   */
   private fun gatherTsFiles(directory: Path): List<Path> {
     Files.list(directory).use { stream ->
       return stream.filter { Files.isRegularFile(it) && it.fileName.toString().lowercase().endsWith(".ts") }
@@ -247,6 +296,15 @@ class VideoMerger {
     }
   }
 
+  /**
+   * 通过 ffmpeg concat 协议合并切片文件。
+   *
+   * @param tsFiles 按顺序排列的 .ts 切片
+   * @param outputFile 目标输出文件
+   * @param format 输出格式（影响部分参数，如 mp4 追加 faststart）
+   * @param ffmpegPath ffmpeg 可执行路径
+   * @throws IllegalStateException ffmpeg 超时或退出码非 0 时抛出
+   */
   private fun runFfmpegConcat(tsFiles: List<Path>, outputFile: Path, format: String, ffmpegPath: String) {
     val concatFile = Files.createTempFile("video-merge-", ".txt")
     try {
@@ -303,18 +361,18 @@ class VideoMerger {
     }
   }
 
-  private fun resolveFfmpegExecutable(explicitExecutable: String?): String {
-    explicitExecutable?.takeIf { it.isNotBlank() }?.let { return it }
-    System.getenv("FFMPEG_PATH")?.takeIf { it.isNotBlank() }?.let { return it }
+  /**
+   * 解析 ffmpeg 路径，封装至本类便于测试/替换。
+   *
+   * @param explicitExecutable 外部显式传入路径
+   * @return 最终用于执行的 ffmpeg 路径
+   */
+  private fun resolveFfmpegExecutable(explicitExecutable: String?): String =
+    FfmpegSupport.resolveFfmpegExecutable(explicitExecutable)
 
-    return try {
-      Loader.load(ffmpeg::class.java)
-    } catch (ex: Throwable) {
-      log.warn("未能加载内置 ffmpeg，可执行程序将回退为命令 {}", DEFAULT_FFMPEG_COMMAND, ex)
-      DEFAULT_FFMPEG_COMMAND
-    }
-  }
-
+  /**
+   * 内部任务结果：用于汇总单个目录处理的增量信息与状态。
+   */
   private data class TaskOutcome(
     val directory: Path,
     val status: MergeProgress.Status,
@@ -325,6 +383,9 @@ class VideoMerger {
     val failure: MergeFailure?
   )
 
+  /**
+   * 合并任务总报告：包含任务规模、成功/跳过/失败统计与明细。
+   */
   data class MergeReport(
     val leafDirectoryCount: Int,
     val mergedDirectoryCount: Int,
@@ -338,11 +399,17 @@ class VideoMerger {
     }
   }
 
+  /**
+   * 合并失败详情：记录失败目录与原因。
+   */
   data class MergeFailure(
     val directory: Path,
     val reason: String
   )
 
+  /**
+   * 合并进度快照：用于 UI 实时反馈。
+   */
   data class MergeProgress(
     val totalDirectories: Int,
     val completedDirectories: Int,
@@ -351,6 +418,9 @@ class VideoMerger {
     val detail: String?,
     val outputFile: Path?
   ) {
+    /**
+     * 目录处理状态。
+     */
     enum class Status {
       MERGED,
       SKIPPED,
@@ -387,10 +457,13 @@ class VideoMerger {
   }
 
   companion object {
+    /** 支持输出的容器格式集合 */
     private val SUPPORTED_FORMATS = setOf("mp4", "mkv")
-    private const val DEFAULT_FFMPEG_COMMAND = "ffmpeg"
+    /** 默认最大并发线程数（当无法获取 CPU 核心数时使用） */
     private const val DEFAULT_MAX_THREADS = 2
+    /** 自然排序用的切分正则：连续数字或非数字片段 */
     private val NATURAL_CHUNK_REGEX = Regex("\\d+|\\D+")
+    /** 占位路径：用于异常情况下的进度上报 */
     private val UNKNOWN_PATH: Path = Path.of("unknown")
   }
 }
