@@ -1,5 +1,10 @@
 # 视频处理工具（TS 合并 + 格式转换）
 
+<div style="display: flex; justify-content: space-between;">
+<img src="https://pixel-oss.aikrai.com/picgo/20250925155920592.png" width="48%" alt="ts视频合并页">
+<img src="https://pixel-oss.aikrai.com/picgo/20250925155941972.png" width="48%" alt="视频格式转换页">
+</div>
+
 一个基于 Kotlin/JavaFX 的轻量级桌面工具，提供 TS 切片批量合并与常见视频格式转换能力，并配套命令行入口，支持在 Windows上运行（需 JDK 21+）。
 
 ## 功能特性
