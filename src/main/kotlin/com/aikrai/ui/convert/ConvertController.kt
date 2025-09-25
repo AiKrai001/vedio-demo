@@ -88,7 +88,13 @@ class ConvertController(private val videoConverter: VideoConverter) {
         updateMessage("任务初始化…")
         val report = videoConverter.convertAll(inputs, format, ffmpegPath, outputPath) { progress ->
           val total = progress.totalFiles.coerceAtLeast(1)
-          updateProgress(progress.completedFiles.toLong(), total.toLong())
+          if (progress.totalDurationMillis > 0) {
+            val denom = progress.totalDurationMillis.toDouble()
+            val numer = progress.processedDurationMillis.coerceAtLeast(0).toDouble().coerceAtMost(denom)
+            updateProgress(numer, denom)
+          } else {
+            updateProgress(progress.completedFiles.toLong().toDouble(), total.toLong().toDouble())
+          }
           val statusText = when (progress.status) {
             VideoConverter.ConversionProgress.Status.PROCESSING -> "处理中"
             VideoConverter.ConversionProgress.Status.CONVERTED -> "已完成"

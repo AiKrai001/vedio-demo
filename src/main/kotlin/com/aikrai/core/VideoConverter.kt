@@ -65,10 +65,16 @@ class VideoConverter {
 
     val ffmpegPath = FfmpegSupport.resolveFfmpegExecutable(ffmpegExecutable)
     val ffprobePath = FfmpegSupport.resolveFfprobeExecutable(ffmpegExecutable)
+    // 预探测每个文件时长（毫秒），供按总时长计算进度条
+    val durationsMs: Map<Path, Long> = normalizedInputs.associateWith { probeDurationMillis(it, ffprobePath) ?: 0L }
+    val totalDurationMs: Long = durationsMs.values.sum()
+    val durationFallback: Boolean = totalDurationMs <= 0L
 
     var convertedCount = 0
     var skippedCount = 0
     val failures = mutableListOf<ConversionFailure>()
+    // 已处理的总时长（毫秒），在每个文件完成后累加；进行中文件通过 ffmpeg 输出实时更新
+    var processedDurationMsSoFar = 0L
 
     normalizedInputs.forEachIndexed { index, input ->
       if (Thread.currentThread().isInterrupted) {
@@ -91,8 +97,33 @@ class VideoConverter {
       val targetFile = resolveTargetFile(input, normalizedOutputDir, normalizedFormat)
 
       try {
-        runConversion(ffmpegPath, input, targetFile, normalizedFormat)
+        val currentFileDuration = durationsMs[input] ?: 0L
+        if (!durationFallback && currentFileDuration > 0L) {
+          // 在转换过程中解析 ffmpeg 输出中的时间进度，驱动“按时长”的进度条
+          runConversion(ffmpegPath, input, targetFile, normalizedFormat) { timeMs ->
+            val clamped = if (currentFileDuration <= 0L) timeMs else minOf(timeMs, currentFileDuration)
+            val processed = processedDurationMsSoFar + clamped
+            progressReporter?.invoke(
+              ConversionProgress(
+                totalFiles = normalizedInputs.size,
+                completedFiles = index,
+                currentFile = input,
+                status = ConversionProgress.Status.PROCESSING,
+                detail = null,
+                detectedFormat = detectedFormat,
+                outputFile = null,
+                totalDurationMillis = totalDurationMs,
+                processedDurationMillis = processed
+              )
+            )
+          }
+        } else {
+          // 无法按时长衡量（未探测到或时长为 0），按文件数回退
+          runConversion(ffmpegPath, input, targetFile, normalizedFormat, onTime = null)
+        }
         convertedCount += 1
+        // 文件完成后，累加该文件时长（回退模式不累加）
+        processedDurationMsSoFar = if (durationFallback) 0L else (processedDurationMsSoFar + (durationsMs[input] ?: 0L))
         progressReporter?.invoke(
           ConversionProgress(
             totalFiles = normalizedInputs.size,
@@ -170,6 +201,35 @@ class VideoConverter {
   }
 
   /**
+   * 使用 ffprobe 探测媒体总时长（毫秒）。
+   * 优先读取容器层 format.duration，解析失败返回 null。
+   */
+  private fun probeDurationMillis(input: Path, ffprobePath: String): Long? {
+    return try {
+      val command = listOf(
+        ffprobePath,
+        "-v", "error",
+        "-show_entries", "format=duration",
+        "-of", "default=noprint_wrappers=1:nokey=1",
+        input.toString()
+      )
+      val process = ProcessBuilder(command)
+        .redirectErrorStream(true)
+        .start()
+      val output = process.inputStream.bufferedReader().use(BufferedReader::readText).trim()
+      if (!process.waitFor(20, TimeUnit.SECONDS)) {
+        process.destroyForcibly()
+        return null
+      }
+      if (process.exitValue() != 0) return null
+      val seconds = output.toDoubleOrNull() ?: return null
+      (seconds * 1000).toLong().coerceAtLeast(0L)
+    } catch (_: Exception) {
+      null
+    }
+  }
+
+  /**
    * 通过文件扩展名推测容器格式（作为探测失败时的兜底）。
    *
    * @param input 输入文件
@@ -216,7 +276,7 @@ class VideoConverter {
    * @param targetFormat 目标容器格式
    * @throws IllegalStateException 所有策略均失败时抛出
    */
-  private fun runConversion(ffmpegPath: String, input: Path, output: Path, targetFormat: String) {
+  private fun runConversion(ffmpegPath: String, input: Path, output: Path, targetFormat: String, onTime: ((Long) -> Unit)? = null) {
     val strategies = conversionStrategies(targetFormat)
     val errorMessages = mutableListOf<String>()
 
@@ -231,7 +291,7 @@ class VideoConverter {
       log.info("尝试转换策略: {}", strategy.description)
       Files.deleteIfExists(output)
       try {
-        executeConversion(ffmpegPath, input, output, strategy.arguments)
+        executeConversion(ffmpegPath, input, output, strategy.arguments, onTime)
         log.info("转换策略 {} 成功", strategy.description)
         return
       } catch (ex: Exception) {
@@ -254,7 +314,7 @@ class VideoConverter {
    * @param output 输出文件
    * @param codecArgs 编解码与封装参数
    */
-  private fun executeConversion(ffmpegPath: String, input: Path, output: Path, codecArgs: List<String>) {
+  private fun executeConversion(ffmpegPath: String, input: Path, output: Path, codecArgs: List<String>, onTime: ((Long) -> Unit)? = null) {
     val command = mutableListOf(
       ffmpegPath,
       "-hide_banner",
@@ -264,6 +324,8 @@ class VideoConverter {
       "-i",
       input.toString()
     )
+    // 输出可解析的进度到标准输出，便于按时长更新 UI
+    command.addAll(listOf("-progress", "pipe:1", "-nostats"))
     command.addAll(codecArgs)
     command.add(output.toString())
 
@@ -271,10 +333,29 @@ class VideoConverter {
       .redirectErrorStream(true)
       .start()
 
+    val timeRegex = Regex("time=([0-9]{2}):([0-9]{2}):([0-9]{2}\\.?[0-9]*)")
+    val outTimeMsRegex = Regex("^out_time_ms=(\\d+)")
     InputStreamReader(process.inputStream).use { reader ->
       reader.buffered().useLines { lines ->
         lines.filter { it.isNotBlank() }
-          .forEach { log.info("[ffmpeg-convert] {}", it) }
+          .forEach { line ->
+            log.info("[ffmpeg-convert] {}", line)
+            if (onTime != null) {
+              val outMs = outTimeMsRegex.find(line)?.groupValues?.getOrNull(1)?.toLongOrNull()
+              if (outMs != null) {
+                onTime.invoke(outMs)
+              } else {
+                val m = timeRegex.find(line)
+                if (m != null) {
+                  val hh = m.groupValues[1].toIntOrNull() ?: 0
+                  val mm = m.groupValues[2].toIntOrNull() ?: 0
+                  val ss = m.groupValues[3].toDoubleOrNull() ?: 0.0
+                  val millis = ((hh * 3600 + mm * 60) * 1000L) + (ss * 1000).toLong()
+                  onTime.invoke(millis)
+                }
+              }
+            }
+          }
       }
     }
 
@@ -458,7 +539,10 @@ class VideoConverter {
     val status: Status,
     val detail: String?,
     val detectedFormat: String?,
-    val outputFile: Path?
+    val outputFile: Path?,
+    // 新增：基于时长的进度支持（毫秒）。若 totalDurationMillis<=0 则表示按文件数回退
+    val totalDurationMillis: Long = 0,
+    val processedDurationMillis: Long = 0
   ) {
     /**
      * 文件转换状态。

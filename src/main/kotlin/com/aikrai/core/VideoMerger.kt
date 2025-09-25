@@ -202,6 +202,10 @@ class VideoMerger {
         )
       } else {
         val computedTarget = normalizedOutputRoot?.let { targetRoot ->
+          // 当指定统一输出根目录时：
+          // - 计算从 root 到当前 ts 目录的相对路径
+          // - 去掉最后一层（存放 .ts 的那一层目录）
+          // - 在其父目录下输出“<叶子目录名>.<格式>”
           val relative = normalizedRoot.relativize(directory)
           val parent = if (relative.nameCount <= 1) {
             targetRoot
@@ -210,7 +214,13 @@ class VideoMerger {
           }
           Files.createDirectories(parent)
           parent.resolve("${directory.fileName}.$format")
-        } ?: directory.resolve("${directory.fileName}.$format")
+        } ?: run {
+          // 未指定统一输出目录时：也遵循“不要再保留 .ts 所在那一层目录”的规则，
+          // 将合并后的文件放到父目录下，文件名为“<叶子目录名>.<格式>”。
+          val parent = directory.parent ?: directory
+          Files.createDirectories(parent)
+          parent.resolve("${directory.fileName}.$format")
+        }
 
         targetFile = computedTarget
 

@@ -104,7 +104,7 @@ class MergeController(private val videoMerger: VideoMerger) {
           updateMessage("${progress.completedDirectories}/$total $statusText$detailSuffix")
           appendLog(
             logArea,
-            "${progress.currentDirectory.fileName}: $statusText$detailSuffix"
+            "${progress.currentDirectory.toAbsolutePath()}: $statusText$detailSuffix"
           )
         }
         if (report.leafDirectoryCount == 0) {

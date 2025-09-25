@@ -25,7 +25,10 @@ repositories {
 
 dependencies {
   implementation("org.jetbrains.kotlin:kotlin-stdlib-jdk8")
-  implementation("org.bytedeco:javacv-platform:1.5.10")
+  // 编译期引入 FFmpeg Java 包（提供 org.bytedeco.ffmpeg.* 类）
+  implementation("org.bytedeco:ffmpeg:6.1.1-1.5.10")
+  // 运行期仅打入 Windows x86_64 的原生可执行/库，避免其他平台包
+  runtimeOnly("org.bytedeco:ffmpeg:6.1.1-1.5.10:windows-x86_64")
   implementation("org.slf4j:slf4j-simple:2.0.16")
   implementation("io.github.mkpaz:atlantafx-base:2.0.1")
 
