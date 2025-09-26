@@ -1,12 +1,15 @@
 package com.aikrai
 
 import atlantafx.base.theme.PrimerLight
-import com.aikrai.core.VideoMerger
 import com.aikrai.core.VideoConverter
+import com.aikrai.core.VideoMerger
+import com.aikrai.core.VideoTrimmer
 import com.aikrai.ui.convert.ConvertController
 import com.aikrai.ui.convert.ConvertView
 import com.aikrai.ui.merge.MergeController
 import com.aikrai.ui.merge.MergeView
+import com.aikrai.ui.trim.TrimController
+import com.aikrai.ui.trim.TrimView
 import com.aikrai.ui.window.WindowHeader
 import javafx.application.Application
 import javafx.scene.Scene
@@ -37,6 +40,8 @@ class VideoMergeApp : Application() {
   private val videoMerger = VideoMerger()
   /** 核心：视频格式转换 */
   private val videoConverter = VideoConverter()
+  /** 核心：批量裁剪视频 */
+  private val videoTrimmer = VideoTrimmer()
 
   /**
    * 初始化主窗口与页面容器，设置全局样式与圆角裁剪。
@@ -50,6 +55,7 @@ class VideoMergeApp : Application() {
 
     val mergeViewNode = MergeView(primaryStage, MergeController(videoMerger)).createContent()
     val convertViewNode = ConvertView(primaryStage, ConvertController(videoConverter)).createContent()
+    val trimViewNode = TrimView(primaryStage, TrimController(videoTrimmer)).createContent()
 
     val mergeTab = Tab("ts批量合并").apply {
       content = mergeViewNode
@@ -59,9 +65,13 @@ class VideoMergeApp : Application() {
       content = convertViewNode
       isClosable = false
     }
+    val trimTab = Tab("批量裁剪").apply {
+      content = trimViewNode
+      isClosable = false
+    }
 
     val tabPane = TabPane().apply {
-      tabs.addAll(mergeTab, convertTab)
+      tabs.addAll(mergeTab, convertTab, trimTab)
       tabClosingPolicy = TabPane.TabClosingPolicy.UNAVAILABLE
       styleClass += "app-tab-pane"
     }
