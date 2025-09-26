@@ -1,0 +1,13 @@
+.list-surface {
+  -fx-background-color: rgba(237, 240, 255, 0.6);
+  -fx-background-radius: 14;
+  -fx-padding: 12;
+  -fx-border-color: rgba(76, 110, 245, 0.18);
+  -fx-border-radius: 14;
+}
+
+.list-surface .placeholder {
+  -fx-text-fill: #7c8599;
+  -fx-font-size: 14px;
+}
+

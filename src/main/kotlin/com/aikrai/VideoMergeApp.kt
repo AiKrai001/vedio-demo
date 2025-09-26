@@ -1,9 +1,12 @@
 package com.aikrai
 
 import atlantafx.base.theme.PrimerLight
+import com.aikrai.core.VideoConcatenator
 import com.aikrai.core.VideoConverter
 import com.aikrai.core.VideoMerger
 import com.aikrai.core.VideoTrimmer
+import com.aikrai.ui.concat.ConcatController
+import com.aikrai.ui.concat.ConcatView
 import com.aikrai.ui.convert.ConvertController
 import com.aikrai.ui.convert.ConvertView
 import com.aikrai.ui.merge.MergeController
@@ -38,6 +41,8 @@ fun main(args: Array<String>) {
 class VideoMergeApp : Application() {
   /** 核心：批量合并 ts 切片 */
   private val videoMerger = VideoMerger()
+  /** 核心：目录视频拼接 */
+  private val videoConcatenator = VideoConcatenator()
   /** 核心：视频格式转换 */
   private val videoConverter = VideoConverter()
   /** 核心：批量裁剪视频 */
@@ -54,11 +59,16 @@ class VideoMergeApp : Application() {
     primaryStage.title = "视频处理工具"
 
     val mergeViewNode = MergeView(primaryStage, MergeController(videoMerger)).createContent()
+    val concatViewNode = ConcatView(primaryStage, ConcatController(videoConcatenator)).createContent()
     val convertViewNode = ConvertView(primaryStage, ConvertController(videoConverter)).createContent()
     val trimViewNode = TrimView(primaryStage, TrimController(videoTrimmer)).createContent()
 
     val mergeTab = Tab("ts批量合并").apply {
       content = mergeViewNode
+      isClosable = false
+    }
+    val concatTab = Tab("视频拼接").apply {
+      content = concatViewNode
       isClosable = false
     }
     val convertTab = Tab("格式转换").apply {
@@ -71,7 +81,7 @@ class VideoMergeApp : Application() {
     }
 
     val tabPane = TabPane().apply {
-      tabs.addAll(mergeTab, convertTab, trimTab)
+      tabs.addAll(mergeTab, concatTab, convertTab, trimTab)
       tabClosingPolicy = TabPane.TabClosingPolicy.UNAVAILABLE
       styleClass += "app-tab-pane"
     }
